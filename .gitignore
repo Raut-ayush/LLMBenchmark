@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual Environment
+.venv/
+
+# Benchmark Results
+results/
+
+# VS Code
+.vscode/
+
+# Environment Files
+.env
