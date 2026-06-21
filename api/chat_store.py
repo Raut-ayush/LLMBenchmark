@@ -1,1 +1,3 @@
 SESSIONS = {}
+
+SESSION_META = {}

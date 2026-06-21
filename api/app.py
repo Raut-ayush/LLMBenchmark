@@ -1,3 +1,5 @@
+# api/app.py
+
 from fastapi import FastAPI
 import shutil
 from api.schemas import ModelRequest, PullModelRequest
@@ -6,9 +8,23 @@ import psutil
 import platform
 from pydantic import BaseModel
 from typing import List
-from api.chat_store import SESSIONS
 import uuid
 import requests
+from fastapi.responses import StreamingResponse
+import json
+import time 
+from api.database import (
+    init_db,
+    create_session as db_create_session,
+    save_message,
+    load_messages,
+    get_session,
+    list_sessions as db_list_sessions,
+    update_session_model,
+    rename_session as db_rename_session,
+    session_exists,
+    delete_session as db_delete_session
+)
 
 OLLAMA_EXE = r"D:/Ollama/ollama.exe"
 
@@ -80,10 +96,20 @@ class SessionMessage(BaseModel):
     session_id: str
     model: str
     message: str
+    
+class StreamChatRequest(BaseModel):
+    model: str
+    message: str
+
+class RenameSessionRequest(BaseModel):
+    session_id: str
+    title: str
 
 app = FastAPI(
     title="Local LLMx API"
 )
+
+init_db()
 
 @app.get("/")
 def root():
@@ -382,11 +408,15 @@ def chat_history(request: ChatHistoryRequest):
     }
     
 @app.post("/chat/session/create")
-def create_session():
+def create_chat_session():
 
     session_id = uuid.uuid4().hex
 
-    SESSIONS[session_id] = []
+    db_create_session(
+        session_id,
+        "unknown",
+        "New Chat"
+    )
 
     return {
         "success": True,
@@ -396,24 +426,61 @@ def create_session():
 @app.get("/chat/sessions")
 def list_sessions():
 
+    sessions = []
+
+    for session in db_list_sessions():
+
+        messages = load_messages(
+            session["id"]
+        )
+
+        sessions.append({
+            "session_id": session["id"],
+            "title": session["title"],
+            "model": session["model"],
+            "created_at": session["created_at"],
+            "updated_at": session["updated_at"],
+            "message_count": len(messages)
+        })
+
     return {
-        "count": len(SESSIONS),
-        "sessions": list(SESSIONS.keys())
+        "count": len(sessions),
+        "sessions": sessions
     }
     
 @app.post("/chat/session/message")
 def session_message(data: SessionMessage):
 
-    history = SESSIONS.get(
-        data.session_id,
-        []
+    session = get_session(
+        data.session_id
     )
 
-    history.append(
-        {
-            "role": "user",
-            "content": data.message
+    if not session:
+
+        return {
+            "success": False,
+            "error": "Session not found"
         }
+
+    save_message(
+        data.session_id,
+        "user",
+        data.message
+    )
+
+    if session["title"] == "New Chat":
+        db_rename_session(
+            data.session_id,
+            data.message[:50]
+        )
+
+    update_session_model(
+        data.session_id,
+        data.model
+    )
+
+    history = load_messages(
+        data.session_id
     )
 
     response = requests.post(
@@ -422,36 +489,106 @@ def session_message(data: SessionMessage):
             "model": data.model,
             "messages": history,
             "stream": False
-        }
+        },
+        timeout=600
     )
 
     result = response.json()
 
-    assistant_reply = (
-        result["message"]["content"]
+    assistant_reply = result["message"]["content"]
+
+    save_message(
+        data.session_id,
+        "assistant",
+        assistant_reply
     )
 
-    history.append(
-        {
-            "role": "assistant",
-            "content": assistant_reply
-        }
+    history = load_messages(
+        data.session_id
     )
 
-    SESSIONS[data.session_id] = history
+    session = get_session(
+        data.session_id
+    )
 
     return {
         "success": True,
+        "session_id": data.session_id,
+        "title": session["title"],
+        "message_count": len(history),
         "response": assistant_reply
     }
     
 @app.get("/chat/session/{session_id}")
-def get_session(session_id: str):
+def get_chat_session(session_id: str):
 
     return {
-        "messages":
-        SESSIONS.get(
-            session_id,
-            []
+        "messages": load_messages(session_id)
+    }
+    
+@app.post("/chat/stream")
+def chat_stream(data: StreamChatRequest):
+
+    def generate():
+
+        response = requests.post(
+            "http://127.0.0.1:11434/api/generate",
+            json={
+                "model": data.model,
+                "prompt": data.message,
+                "stream": True
+            },
+            stream=True
         )
+
+        for line in response.iter_lines():
+
+            if not line:
+                continue
+
+            chunk = json.loads(
+                line.decode("utf-8")
+            )
+
+            token = chunk.get(
+                "response",
+                ""
+            )
+
+            if token:
+                yield f"data: {token}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream"
+    )
+    
+@app.delete("/chat/session/{session_id}")
+def delete_chat_session(session_id: str):
+
+    db_delete_session(session_id)
+
+    return {
+        "success": True
+    }
+    
+@app.post("/chat/session/rename")
+def rename_chat_session(data: RenameSessionRequest):
+
+    session = get_session(
+        data.session_id
+    )
+
+    if not session:
+        return {
+            "success": False
+        }
+
+    db_rename_session(
+        data.session_id,
+        data.title
+    )
+
+    return {
+        "success": True
     }
