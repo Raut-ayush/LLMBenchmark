@@ -1,59 +1,130 @@
 import psutil
-import subprocess
+import threading
 import time
-
-try:
-    from pynvml import *
-    nvmlInit()
-    GPU_AVAILABLE = True
-except:
-    GPU_AVAILABLE = False
+import csv
+import subprocess
 
 
-def get_gpu_info():
+class HardwareMonitor:
 
-    if not GPU_AVAILABLE:
-        return {
-            "gpu_util": 0,
-            "gpu_memory_mb": 0,
-            "gpu_temp": 0
+    def __init__(self):
+
+        self.running = False
+        self.samples = []
+
+    def get_gpu(self):
+
+        try:
+
+            result = subprocess.check_output(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=utilization.gpu,memory.used,temperature.gpu,power.draw",
+                    "--format=csv,noheader,nounits"
+                ]
+            )
+
+            gpu_util, gpu_mem, gpu_temp, gpu_power = (
+                result.decode()
+                .strip()
+                .split(", ")
+            )
+
+            return {
+                "gpu_util": float(gpu_util),
+                "gpu_memory_mb": float(gpu_mem),
+                "gpu_temp": float(gpu_temp),
+                "gpu_power_w": float(gpu_power)
+            }
+
+        except Exception:
+
+            return {
+                "gpu_util": 0,
+                "gpu_memory_mb": 0,
+                "gpu_temp": 0,
+                "gpu_power_w": 0
+            }
+
+    def sample(self):
+
+        ram = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+
+        data = {
+
+            "timestamp": time.time(),
+
+            "cpu_percent":
+                psutil.cpu_percent(interval=0.1),
+
+            "ram_percent":
+                ram.percent,
+
+            "ram_used_gb":
+                round(
+                    ram.used / 1024**3,
+                    2
+                ),
+
+            "swap_used_gb":
+                round(
+                    swap.used / 1024**3,
+                    2
+                )
         }
 
-    handle = nvmlDeviceGetHandleByIndex(0)
+        data.update(
+            self.get_gpu()
+        )
 
-    util = nvmlDeviceGetUtilizationRates(handle)
+        self.samples.append(
+            data
+        )
 
-    mem = nvmlDeviceGetMemoryInfo(handle)
+    def monitor_loop(self):
 
-    temp = nvmlDeviceGetTemperature(
-        handle,
-        NVML_TEMPERATURE_GPU
-    )
+        while self.running:
 
-    return {
-        "gpu_util": util.gpu,
-        "gpu_memory_mb":
-            round(mem.used / 1024 / 1024, 2),
-        "gpu_temp": temp
-    }
+            self.sample()
 
+            time.sleep(1)
 
-def get_system_info():
+    def start(self):
 
-    ram = psutil.virtual_memory()
+        self.running = True
 
-    cpu = psutil.cpu_percent(interval=1)
+        self.thread = threading.Thread(
+            target=self.monitor_loop,
+            daemon=True
+        )
 
-    gpu = get_gpu_info()
+        self.thread.start()
 
-    return {
-        "cpu_percent": cpu,
-        "ram_percent": ram.percent,
-        "ram_used_gb":
-            round(
-                ram.used / 1024**3,
-                2
-            ),
+    def stop(self):
 
-        **gpu
-    }
+        self.running = False
+
+        self.thread.join()
+
+    def save_csv(self, filename):
+
+        if not self.samples:
+            return
+
+        with open(
+            filename,
+            "w",
+            newline=""
+        ) as f:
+
+            writer = csv.DictWriter(
+                f,
+                fieldnames=self.samples[0].keys()
+            )
+
+            writer.writeheader()
+
+            writer.writerows(
+                self.samples
+            )

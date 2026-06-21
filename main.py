@@ -2,16 +2,23 @@ from benchmark.runner import (
     run_benchmark
 )
 
-MODEL = "qwen2.5-coder:7b"
+MODEL = (
+    "qwen2.5-coder:7b"
+)
 
-PROMPT = """
-Write a Linux character
-device driver.
-"""
+PROMPT = "Hello"
 
-result = run_benchmark(
+summary = run_benchmark(
     MODEL,
     PROMPT
 )
 
-print("\nDONE")
+print(
+    "\n===== SUMMARY ====="
+)
+
+for k, v in summary.items():
+
+    print(
+        f"{k}: {v}"
+    )
