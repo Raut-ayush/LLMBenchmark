@@ -5,6 +5,10 @@ import subprocess
 import psutil
 import platform
 from pydantic import BaseModel
+from typing import List
+from api.chat_store import SESSIONS
+import uuid
+import requests
 
 OLLAMA_EXE = r"D:/Ollama/ollama.exe"
 
@@ -54,6 +58,28 @@ MODEL_CATALOG = [
         "category": "coding"
     }
 ]
+
+class ChatRequest(BaseModel):
+    model: str
+    message: str
+
+class Message(BaseModel):
+    role: str
+    content: str
+
+
+class ChatHistoryRequest(BaseModel):
+    model: str
+    messages: List[Message]
+
+class SessionCreate(BaseModel):
+    model: str
+
+
+class SessionMessage(BaseModel):
+    session_id: str
+    model: str
+    message: str
 
 app = FastAPI(
     title="Local LLMx API"
@@ -280,4 +306,152 @@ def recommended_models():
             "gpu_vram_gb": round(gpu_vram_gb, 1)
         },
         "models": recommendations
+    }
+    
+@app.post("/chat")
+def chat(request: ChatRequest):
+
+    import requests
+    import time
+
+    start = time.time()
+
+    payload = {
+        "model": request.model,
+        "prompt": request.message,
+        "stream": False
+    }
+
+    response = requests.post(
+        "http://127.0.0.1:11434/api/generate",
+        json=payload,
+        timeout=600
+    )
+
+    data = response.json()
+
+    return {
+        "success": True,
+        "model": request.model,
+        "response": data.get("response"),
+        "prompt_tokens": data.get("prompt_eval_count"),
+        "output_tokens": data.get("eval_count"),
+        "total_duration_sec":
+            round(
+                data.get("total_duration", 0)
+                / 1_000_000_000,
+                2
+            ),
+        "time_taken":
+            round(
+                time.time() - start,
+                2
+            )
+    }
+    
+@app.post("/chat/history")
+def chat_history(request: ChatHistoryRequest):
+
+    import requests
+
+    payload = {
+        "model": request.model,
+        "messages": [
+            {
+                "role": msg.role,
+                "content": msg.content
+            }
+            for msg in request.messages
+        ],
+        "stream": False
+    }
+
+    response = requests.post(
+        "http://127.0.0.1:11434/api/chat",
+        json=payload,
+        timeout=600
+    )
+
+    data = response.json()
+
+    return {
+        "success": True,
+        "model": request.model,
+        "response":
+            data["message"]["content"]
+    }
+    
+@app.post("/chat/session/create")
+def create_session():
+
+    session_id = uuid.uuid4().hex
+
+    SESSIONS[session_id] = []
+
+    return {
+        "success": True,
+        "session_id": session_id
+    }
+    
+@app.get("/chat/sessions")
+def list_sessions():
+
+    return {
+        "count": len(SESSIONS),
+        "sessions": list(SESSIONS.keys())
+    }
+    
+@app.post("/chat/session/message")
+def session_message(data: SessionMessage):
+
+    history = SESSIONS.get(
+        data.session_id,
+        []
+    )
+
+    history.append(
+        {
+            "role": "user",
+            "content": data.message
+        }
+    )
+
+    response = requests.post(
+        "http://127.0.0.1:11434/api/chat",
+        json={
+            "model": data.model,
+            "messages": history,
+            "stream": False
+        }
+    )
+
+    result = response.json()
+
+    assistant_reply = (
+        result["message"]["content"]
+    )
+
+    history.append(
+        {
+            "role": "assistant",
+            "content": assistant_reply
+        }
+    )
+
+    SESSIONS[data.session_id] = history
+
+    return {
+        "success": True,
+        "response": assistant_reply
+    }
+    
+@app.get("/chat/session/{session_id}")
+def get_session(session_id: str):
+
+    return {
+        "messages":
+        SESSIONS.get(
+            session_id,
+            []
+        )
     }
