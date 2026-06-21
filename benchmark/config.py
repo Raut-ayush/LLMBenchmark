@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
-DEFAULT_MODEL = "qwen2.5-coder:7b"
+MODEL = "qwen2.5-coder:3b"
 RESULTS_DIR = Path("results")
 DATABASE_PATH = RESULTS_DIR / "benchmarks.db"
 
@@ -15,7 +15,7 @@ DATABASE_PATH = RESULTS_DIR / "benchmarks.db"
 class GenerationOptions:
     temperature: float = 0.0
     seed: int = 42
-    num_predict: int = 256
+    num_predict: int = 1000
     num_ctx: int = 4096
     top_p: float = 0.9
     top_k: int = 40
@@ -32,7 +32,7 @@ class BenchmarkConfig:
     mode: Literal["cold", "warm", "both"] = "both"
     repetitions: int = 3
     timeout: float = 900.0
-    sample_interval: float = 1.0
+    sample_interval: float = 0.2
     keep_alive: str = "5m"
     ollama_url: str = DEFAULT_OLLAMA_URL
     results_dir: Path = field(default_factory=lambda: RESULTS_DIR)

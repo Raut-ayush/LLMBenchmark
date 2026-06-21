@@ -1,0 +1,13 @@
+MODEL = "qwen2.5-coder:3b"
+
+PROMPT = PROMPTS["coding"]
+
+NUM_PREDICT = 1000
+
+CONTEXT = 4096
+
+MODE = "both"
+
+REPETITIONS = 3
+
+SAMPLE_INTERVAL = 0.2

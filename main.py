@@ -3,10 +3,26 @@ from benchmark.runner import (
 )
 
 MODEL = (
-    "qwen2.5-coder:7b"
+    "qwen2.5-coder:3b"
 )
 
-PROMPT = "Hello"
+PROMPT = """
+Create a production-ready STM32 UART driver.
+
+Requirements:
+
+- C language
+- STM32 HAL
+- Interrupt support
+- DMA support
+- Ring buffer
+- Error handling
+- Header file
+- Source file
+- Example main.c
+
+Explain every step in detail.
+"""
 
 summary = run_benchmark(
     MODEL,
