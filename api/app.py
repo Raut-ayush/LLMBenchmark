@@ -11,6 +11,7 @@ from typing import List
 import uuid
 import requests
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 import json
 import time 
 from api.database import (
@@ -27,6 +28,7 @@ from api.database import (
 )
 
 OLLAMA_EXE = r"D:/Ollama/ollama.exe"
+OLLAMA_URL = "http://127.0.0.1:11434"
 
 print("OLLAMA PATH =", OLLAMA_EXE)
 
@@ -109,6 +111,14 @@ app = FastAPI(
     title="Local LLMx API"
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 init_db()
 
 @app.get("/")
@@ -125,51 +135,151 @@ def health():
     
 @app.get("/models")
 def get_models():
-    import requests
-
-    response = requests.get(
-        "http://127.0.0.1:11434/api/tags"
-)
-
-    return response.json()
+    try:
+        response = requests.get(
+            f"{OLLAMA_URL}/api/tags",
+            timeout=5
+        )
+        response.raise_for_status()
+        data = response.json()
+        return {
+            "models": data.get("models", []),
+            "ollama_running": True
+        }
+    except Exception as exc:
+        return {
+            "models": [],
+            "ollama_running": False,
+            "error": str(exc)
+        }
 
 @app.get("/models/running")
 def running_models():
-
-    import requests
-
-    response = requests.get(
-        "http://127.0.0.1:11434/api/ps"
-    )
-
-    data = response.json()
+    try:
+        response = requests.get(
+            f"{OLLAMA_URL}/api/ps",
+            timeout=5
+        )
+        response.raise_for_status()
+        data = response.json()
+    except Exception as exc:
+        return {
+            "count": 0,
+            "models": [],
+            "ollama_running": False,
+            "error": str(exc)
+        }
 
     return {
         "count": len(data.get("models", []))
         if isinstance(data.get("models"), list)
         else 0,
-        "models": data.get("models", [])
+        "models": data.get("models", []),
+        "ollama_running": True
     }
     
 @app.post("/models/unload")
 def unload_model(request: ModelRequest):
-
-    import requests
-
     payload = {
         "model": request.model,
+        "prompt": "",
+        "stream": False,
         "keep_alive": 0
     }
 
-    response = requests.post(
-        "http://127.0.0.1:11434/api/generate",
-        json=payload
-    )
+    try:
+        response = requests.post(
+            f"{OLLAMA_URL}/api/generate",
+            json=payload,
+            timeout=60
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        return {
+            "success": False,
+            "model": request.model,
+            "error": str(exc)
+        }
 
     return {
         "success": True,
         "model": request.model
     }
+
+@app.post("/models/load")
+def load_model(request: ModelRequest):
+
+    payload = {
+        "model": request.model,
+        "prompt": "hi",
+        "stream": False,
+        "options": {
+            "num_predict": 1
+        },
+        "keep_alive": "5m"
+    }
+
+    try:
+        response = requests.post(
+            f"{OLLAMA_URL}/api/generate",
+            json=payload,
+            timeout=120
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        return {
+            "success": False,
+            "model": request.model,
+            "error": str(exc)
+        }
+
+    return {
+        "success": True,
+        "model": request.model
+    }
+
+@app.get("/models/{model_name}")
+def inspect_model(model_name: str):
+
+    try:
+        response = requests.post(
+            f"{OLLAMA_URL}/api/show",
+            json={"model": model_name},
+            timeout=30
+        )
+        response.raise_for_status()
+        return {
+            "success": True,
+            "model": model_name,
+            "details": response.json()
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "model": model_name,
+            "error": str(exc)
+        }
+
+@app.delete("/models/{model_name}")
+def delete_model(model_name: str):
+
+    try:
+        response = requests.delete(
+            f"{OLLAMA_URL}/api/delete",
+            json={"model": model_name},
+            timeout=120
+        )
+        response.raise_for_status()
+        return {
+            "success": True,
+            "model": model_name
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "model": model_name,
+            "error": str(exc)
+        }
     
 @app.post("/models/pull")
 def pull_model(request: PullModelRequest):
