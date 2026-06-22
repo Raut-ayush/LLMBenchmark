@@ -222,8 +222,130 @@ export async function sendMessage(
   });
 }
 
+export type StreamChatTokenHandler = (token: string) => void;
+
+export async function streamMessage(
+  sessionId: string,
+  model: string,
+  message: string,
+  onToken: StreamChatTokenHandler,
+  signal?: AbortSignal,
+): Promise<{ done: true }> {
+  const response = await fetch(`${API_URL}/chat/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    signal,
+    body: JSON.stringify({ model, message }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Request failed with status ${response.status}`);
+  }
+
+  if (!response.body) {
+    return { done: true };
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // SSE lines: `data: <token>\n\n`
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+
+    for (const part of parts) {
+      const line = part.trim();
+      if (!line) continue;
+      if (!line.startsWith("data:")) continue;
+      const token = line.replace(/^data:\s?/, "");
+      if (token) onToken(token);
+    }
+  }
+
+  return { done: true };
+}
+
+
 export async function deleteSession(sessionId: string): Promise<void> {
   await apiRequest(`/chat/session/${sessionId}`, {
     method: "DELETE",
   });
 }
+
+// -----------------------------
+// Benchmark API (Phase 3)
+// -----------------------------
+
+export interface RunBenchmarkRequest {
+  model: string;
+  prompt_id: string;
+  mode: "cold" | "warm" | "both";
+  interval: number;
+  repetitions: number;
+  ctx: number;
+  maxTokens: number;
+  temperature: number;
+}
+
+export interface RunBenchmarkResponse {
+  session_id: string;
+  status: string;
+  created_at?: string;
+}
+
+export interface BenchmarkSessionListItem {
+  session_id: string;
+  created_at?: string;
+  finished_at?: string;
+  status?: string;
+  summary?: unknown;
+}
+
+export interface BenchmarkSessionsResponse {
+  count: number;
+  sessions: BenchmarkSessionListItem[];
+}
+
+export async function runBenchmark(request: {
+  model: string;
+  prompt_id: string;
+  mode: "cold" | "warm" | "both";
+  interval: number;
+  repetitions: number;
+  ctx: number;
+  maxTokens: number;
+  temperature: number;
+}): Promise<RunBenchmarkResponse> {
+  return apiRequest<RunBenchmarkResponse>("/benchmark/run", {
+    method: "POST",
+    body: JSON.stringify({
+      model: request.model,
+      prompt_id: request.prompt_id,
+      mode: request.mode,
+      interval: request.interval,
+      repetitions: request.repetitions,
+      ctx: request.ctx,
+      maxTokens: request.maxTokens,
+      temperature: request.temperature,
+    }),
+  });
+}
+
+export async function getBenchmarkSessions(): Promise<BenchmarkSessionsResponse> {
+  return apiRequest<BenchmarkSessionsResponse>("/benchmark/sessions");
+}
+
+export async function getBenchmarkSession(sessionId: string): Promise<any> {
+  // Backend returns a flexible session payload.
+  return apiRequest<any>(`/benchmark/sessions/${sessionId}`);
+}
+

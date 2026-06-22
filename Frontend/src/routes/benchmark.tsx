@@ -14,6 +14,8 @@ import { Play, Download, Loader2, ChevronDown, ChevronUp } from "lucide-react";
 import { MOCK_MODELS, MOCK_PROMPTS, MOCK_RESULTS } from "@/lib/mock-data";
 import { BenchmarkCharts } from "@/components/benchmark-charts";
 import { toast } from "sonner";
+import { getBenchmarkSession, getBenchmarkSessions, runBenchmark } from "@/lib/api";
+
 
 export const Route = createFileRoute("/benchmark")({
   head: () => ({
@@ -40,32 +42,54 @@ function BenchmarkPage() {
   const [logs, setLogs] = useState<string[]>([]);
   const [logsOpen, setLogsOpen] = useState(true);
   const [result, setResult] = useState(MOCK_RESULTS[0]);
+  const [lastSessionId, setLastSessionId] = useState<string | null>(null);
 
-  const start = () => {
-    setRunning(true); setProgress(0); setLogs([]);
-    const messages = [
-      `[init] model=${model} mode=${mode}`,
-      `[load] cold start...`,
-      `[load] loaded in 0.53s`,
-      `[gen ] streaming tokens...`,
-      `[mon ] gpu_util=33% ram=12.8GB`,
-      `[mon ] gpu_util=78% ram=13.1GB`,
-      `[done] generated 1000 tokens @ 12.4 tok/s`,
-    ];
-    let i = 0;
-    const t = window.setInterval(() => {
-      setProgress((p) => Math.min(100, p + 8));
-      if (i < messages.length) { setLogs((l) => [...l, messages[i]]); i++; }
-      if (i >= messages.length) {
-        window.clearInterval(t);
-        setRunning(false); setProgress(100);
-        setResult({ ...MOCK_RESULTS[0], model, mode });
-        toast.success("Benchmark complete");
+  const start = async () => {
+    setRunning(true);
+    setProgress(0);
+    setLogs([]);
+
+    try {
+      const res = await runBenchmark({
+        model,
+        prompt_id: promptId,
+        mode,
+        interval,
+        repetitions: reps,
+        ctx,
+        maxTokens,
+        temperature: temp[0],
+      });
+
+      setLastSessionId(res.session_id);
+      setProgress(100);
+      toast.success(`Benchmark started · session ${res.session_id}`);
+
+      // For now, the backend runs synchronously; so we fetch once.
+      // Later we can poll / stream progress.
+      const details = await getBenchmarkSession(res.session_id);
+
+      // Attempt to map backend trial/summary -> existing MOCK_RESULTS shape.
+      // If mapping is missing, we at least avoid crashing.
+      if (details?.summary) {
+        setResult((prev) => ({
+          ...prev,
+          model,
+          mode,
+          // best-effort: if backend summary already matches these fields, you can enhance mapping later
+          ...(details.summary?.[`${model}::${mode}`] ?? details.summary?.[Object.keys(details.summary)[0]] ?? {}),
+        }));
       }
-    }, 350);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Benchmark failed");
+      setProgress(0);
+    } finally {
+      setRunning(false);
+    }
   };
 
   return (
+
     <div className="mx-auto max-w-7xl space-y-6 px-6 py-10">
       <header className="space-y-2">
         <h1 className="font-display text-3xl font-semibold tracking-tight">Benchmark</h1>

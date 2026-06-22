@@ -1,11 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Download, FileJson, FileText, ChevronRight } from "lucide-react";
 import { MOCK_RESULTS, type BenchmarkResult } from "@/lib/mock-data";
+import { getBenchmarkSessions } from "@/lib/api";
+
 import { BenchmarkCharts } from "@/components/benchmark-charts";
 import { toast } from "sonner";
 
@@ -21,8 +24,32 @@ export const Route = createFileRoute("/results")({
 
 function ResultsPage() {
   const [selected, setSelected] = useState<BenchmarkResult>(MOCK_RESULTS[0]);
+  const [sessionsLoaded, setSessionsLoaded] = useState(false);
+  const [sessions, setSessions] = useState<any[]>([]);
+
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      try {
+        const res = await getBenchmarkSessions();
+        if (!mounted) return;
+        setSessions(res.sessions ?? []);
+        setSessionsLoaded(true);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to load benchmark sessions");
+        if (!mounted) return;
+        setSessions([]);
+        setSessionsLoaded(true);
+      }
+    };
+    void load();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   return (
+
     <div className="mx-auto max-w-7xl space-y-6 px-6 py-10">
       <header className="space-y-2">
         <h1 className="font-display text-3xl font-semibold tracking-tight">Results</h1>
@@ -46,18 +73,55 @@ function ResultsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {MOCK_RESULTS.map((r) => (
-                  <TableRow
-                    key={r.session_id}
-                    onClick={() => setSelected(r)}
-                    className={`cursor-pointer ${selected.session_id === r.session_id ? "bg-primary/10" : ""}`}
-                  >
-                    <TableCell className="font-mono text-xs">{r.model}</TableCell>
-                    <TableCell><Badge variant="outline" className="text-[10px]">{r.mode}</Badge></TableCell>
-                    <TableCell className="font-mono text-primary">{r.generation_tps}</TableCell>
-                    <TableCell><ChevronRight className="h-4 w-4 text-muted-foreground" /></TableCell>
+                {sessionsLoaded && sessions.length ? (
+                  sessions.map((s: any) => {
+                    const model = s?.summary?.model ?? s?.summary?.["q" as any]?.model ?? "";
+                    const mode = s?.summary?.mode ?? "";
+                    const generation_tps = s?.summary?.generation_tps ?? 0;
+                    return (
+                      <TableRow
+                        key={s.session_id}
+                        onClick={() => {
+                          // Best-effort mapping into existing UI type
+                          setSelected((prev) => ({
+                            ...prev,
+                            session_id: s.session_id,
+                            model: model || prev.model,
+                            mode: (mode as any) || prev.mode,
+                            generation_tps: generation_tps || prev.generation_tps,
+                            created_at: s.created_at || prev.created_at,
+                            prompt_name: prev.prompt_name,
+                            prompt_tps: (s?.summary?.prompt_tps as any) ?? prev.prompt_tps,
+                            time_to_first_token_sec: (s?.summary?.time_to_first_token_sec as any) ?? prev.time_to_first_token_sec,
+                            load_time_sec: (s?.summary?.load_time_sec as any) ?? prev.load_time_sec,
+                            prompt_tokens: (s?.summary?.prompt_tokens as any) ?? prev.prompt_tokens,
+                            output_tokens: (s?.summary?.output_tokens as any) ?? prev.output_tokens,
+                            peak_gpu_util_percent: (s?.summary?.peak_gpu_util_percent as any) ?? prev.peak_gpu_util_percent,
+                            peak_gpu_memory_mb: (s?.summary?.peak_gpu_memory_mb as any) ?? prev.peak_gpu_memory_mb,
+                            peak_cpu_percent: (s?.summary?.peak_cpu_percent as any) ?? prev.peak_cpu_percent,
+                            peak_ram_used_gb: (s?.summary?.peak_ram_used_gb as any) ?? prev.peak_ram_used_gb,
+                            peak_gpu_temp_c: (s?.summary?.peak_gpu_temp_c as any) ?? prev.peak_gpu_temp_c,
+                          }));
+                        }}
+                        className={`cursor-pointer ${selected.session_id === s.session_id ? "bg-primary/10" : ""}`}
+                      >
+                        <TableCell className="font-mono text-xs">{model || "(unknown)"}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="text-[10px]">{mode || ""}</Badge>
+                        </TableCell>
+                        <TableCell className="font-mono text-primary">{generation_tps}</TableCell>
+                        <TableCell><ChevronRight className="h-4 w-4 text-muted-foreground" /></TableCell>
+                      </TableRow>
+                    );
+                  })
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+                      {sessionsLoaded ? "No benchmark sessions yet" : "Loading sessions…"}
+                    </TableCell>
                   </TableRow>
-                ))}
+                )}
+
               </TableBody>
             </Table>
           </CardContent>

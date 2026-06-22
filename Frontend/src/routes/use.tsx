@@ -19,9 +19,11 @@ import {
   getSession,
   getSessions,
   sendMessage,
+  streamMessage,
   type ChatRole,
   type SessionSummary,
 } from "@/lib/api";
+
 
 export const Route = createFileRoute("/use")({
   head: () => ({
@@ -47,10 +49,11 @@ async function fetchSession(sessionId: string): Promise<Msg[]> {
   const messages = await getSession(sessionId);
 
   return messages.map((msg) => ({
-    id: crypto.randomUUID(),
+    id: crypto?.randomUUID?.() ?? String(Date.now()) + Math.random().toString(16).slice(2),
     role: msg.role,
     content: msg.content,
   }));
+
 }
 
 function UsePage() {
@@ -200,11 +203,11 @@ function UsePage() {
 
     const text = input.trim();
     const userMsg: Msg = {
-      id: crypto.randomUUID(),
+      id: crypto?.randomUUID?.() ?? String(Date.now()) + Math.random().toString(16).slice(2),
       role: "user",
       content: text,
     };
-    const assistantId = crypto.randomUUID();
+    const assistantId = crypto?.randomUUID?.() ?? String(Date.now()) + Math.random().toString(16).slice(2);
 
     setMessages((prev) => [
       ...prev,
@@ -212,7 +215,7 @@ function UsePage() {
       {
         id: assistantId,
         role: "assistant",
-        content: "Generating…",
+        content: "",
       },
     ]);
 
@@ -222,19 +225,41 @@ function UsePage() {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    try {
-      const result = await sendMessage(activeSessionId, model, text, controller.signal);
+    let full = "";
 
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantId ? { ...msg, content: result.response || "" } : msg,
-        ),
+    try {
+      // Stream tokens via SSE (backend: POST /chat/stream)
+      await streamMessage(
+        activeSessionId,
+        model,
+        text,
+        (token) => {
+          full += token;
+          setMessages((prev) =>
+            prev.map((msg) => (msg.id === assistantId ? { ...msg, content: full } : msg)),
+          );
+        },
+        controller.signal,
       );
+
+      // Persist final assistant message + update session title/model
+      // (Backend persistence is handled by the non-stream endpoint.)
+      const persisted = await sendMessage(activeSessionId, model, text, controller.signal);
+
+      if (persisted?.response) {
+        full = persisted.response;
+        setMessages((prev) =>
+          prev.map((msg) => (msg.id === assistantId ? { ...msg, content: full } : msg)),
+        );
+      }
+
 
       const updatedSessions = await refreshSessions();
       const updatedSession = updatedSessions.find((s) => s.session_id === activeSessionId);
 
-      setCurrentSessionTitle(updatedSession?.title || result.title || "New Chat");
+      if (updatedSession?.title) {
+        setCurrentSessionTitle(updatedSession.title);
+      }
 
       const persistedMessages = await fetchSession(activeSessionId);
       setMessages(persistedMessages);
@@ -242,6 +267,7 @@ function UsePage() {
       if (updatedSession?.model && updatedSession.model !== "unknown") {
         setModel(updatedSession.model);
       }
+
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         setMessages((prev) => prev.filter((msg) => msg.id !== assistantId));

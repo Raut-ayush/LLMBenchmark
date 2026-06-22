@@ -27,6 +27,12 @@ from api.database import (
     delete_session as db_delete_session
 )
 
+from api.benchmark_schemas import RunBenchmarkRequest
+from benchmark.config import BenchmarkConfig, GenerationOptions
+from benchmark.runner import BenchmarkRunner
+from benchmark.storage import BenchmarkStore
+
+
 OLLAMA_EXE = r"D:/Ollama/ollama.exe"
 OLLAMA_URL = "http://127.0.0.1:11434"
 
@@ -639,6 +645,7 @@ def get_chat_session(session_id: str):
 @app.post("/chat/stream")
 def chat_stream(data: StreamChatRequest):
 
+
     def generate():
 
         response = requests.post(
@@ -681,6 +688,104 @@ def delete_chat_session(session_id: str):
     return {
         "success": True
     }
+
+
+# -----------------------------
+# Benchmark API (Phase 3)
+# -----------------------------
+
+
+@app.post("/benchmark/run")
+def benchmark_run(data: RunBenchmarkRequest):
+    # NOTE: benchmark runner expects *prompt strings* (not prompt_id).
+    # For now we treat prompt_id as a suite file stem in /prompts/*.json.
+    # If your UI passes raw prompt_id like "coding/fibonacci", adjust this lookup.
+    from benchmark.prompts import load_suite
+
+    # Try to interpret prompt_id as either:
+    # 1) "suite" (e.g. "coding") -> load suite list, pick first
+    # 2) "suite-prompt" already expanded (e.g. "coding-1") -> pick first matching id
+    # 3) full prompt id from load_suite (e.g. "coding-1")
+    suite_name = data.prompt_id.split("/")[0]
+    suite_items = []
+    try:
+        suite_items = load_suite(suite_name)
+    except Exception:
+        suite_items = []
+
+    prompt_text = suite_items[0]["prompt"] if suite_items else data.prompt_id
+
+    # Map UI controls into benchmark config
+    config = BenchmarkConfig(
+        models=[data.model],
+        prompts=[prompt_text],
+        mode=data.mode,
+        repetitions=data.repetitions,
+        sample_interval=data.interval,
+        generation=GenerationOptions(
+            temperature=data.temperature,
+            seed=42,
+            num_predict=data.maxTokens,
+            num_ctx=data.ctx,
+            top_p=0.9,
+            top_k=40,
+        ),
+    )
+
+    runner = BenchmarkRunner(config)
+    output = runner.run()
+
+    return {
+        "session_id": output.get("id"),
+        "status": output.get("status"),
+        "created_at": output.get("created_at"),
+    }
+
+
+
+@app.get("/benchmark/sessions")
+def benchmark_sessions():
+    cfg = BenchmarkConfig(
+        models=["qwen2.5-coder:3b"],
+        prompts=["x"],
+        mode="warm",
+    )
+    store = BenchmarkStore(cfg.results_dir / "benchmarks.db")
+
+    sessions = store.list_sessions(limit=50)
+
+    return {
+        "count": len(sessions),
+        "sessions": [
+            {
+                "session_id": s.get("id"),
+                "created_at": s.get("created_at"),
+                "finished_at": s.get("finished_at"),
+                "status": s.get("status"),
+                "summary": s.get("summary", {}),
+            }
+            for s in sessions
+        ],
+    }
+
+
+
+@app.get("/benchmark/sessions/{session_id}")
+def benchmark_session(session_id: str):
+    cfg = BenchmarkConfig(
+        models=["qwen2.5-coder:3b"],
+        prompts=["x"],
+        mode="warm",
+    )
+    store = BenchmarkStore(cfg.results_dir / "benchmarks.db")
+
+    session = store.get_session(session_id)
+    if not session:
+        return {"success": False, "error": "Session not found"}
+
+    return {"success": True, **session}
+
+
     
 @app.post("/chat/session/rename")
 def rename_chat_session(data: RenameSessionRequest):
@@ -688,6 +793,8 @@ def rename_chat_session(data: RenameSessionRequest):
     session = get_session(
         data.session_id
     )
+
+
 
     if not session:
         return {
